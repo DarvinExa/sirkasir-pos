@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Data & runtime
+backend/data/db.json
+backend/data/db.json.tmp
+
+# Build output
+frontend/dist/
+
+# Logs
+*.log
+
+# Environment
+.env
+*.local
+
+# OS
+.DS_Store
