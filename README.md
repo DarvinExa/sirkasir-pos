@@ -33,7 +33,7 @@ createdb sirkasir
 cd backend
 npm install
 cp .env.example .env    # lalu WAJIB sesuaikan isinya (lihat di bawah)
-npm run setup           # buat skema tabel (migrate) + isi data awal (seed)
+npm run setup
 npm start               # API berjalan di http://localhost:4000
 ```
 
@@ -52,9 +52,27 @@ npm start               # API berjalan di http://localhost:4000
 Catatan:
 
 - `npm run migrate` hanya membuat/menyegarkan struktur tabel (aman diulang).
-- `npm run seed` mengisi data awal (menu, meja, akun demo, dll) dan menimpa data lama.
-- `npm run setup` menjalankan keduanya sekaligus.
-- Untuk DB cloud (Neon, Supabase, Railway) yang butuh SSL, set `PGSSL=true` di `.env`.
+- `npm run seed` mengisi **data demo** dan menimpa data lama.
+- `npm run setup` menjalankan migrate + seed demo sekaligus.
+
+### Dua mode data awal
+
+- **Mode demo** (untuk coba-coba / live demo online):
+  ```bash
+  npm run setup        # migrate + isi data contoh (menu, meja, pelanggan, promo, 2 akun demo)
+  ```
+- **Mode kosong** (untuk dipakai sendiri — mulai dari nol):
+  ```bash
+  npm run setup:blank  # migrate + hanya 1 akun admin + pengaturan default
+  ```
+  Cocok kalau kamu mengunduh proyek ini untuk toko sendiri: tidak ada data contoh,
+  tinggal isi menu, bahan, dan meja sesuai kebutuhanmu.
+  - Akun admin default: `admin@sirkasir.test` / `admin123` (PIN `1111`). **Segera ganti** setelah login.
+  - Bisa dikustom lewat environment variable (.env) sebelum menjalankan, mis:
+    ```bash
+    ADMIN_EMAIL=aku@tokoku.com ADMIN_PASSWORD=rahasia123 STORE_NAME="Warung Makan Ku" npm run setup:blank
+    ```
+    Variabel yang didukung: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_PIN`, `ADMIN_NAME`, `STORE_NAME`.
 - Buat database-nya dulu sebelum `npm run setup`, mis. `createdb -U postgres sirkasir`
   (atau lewat pgAdmin). Jalankan dari terminal mana saja — tidak perlu di folder tertentu.
 
@@ -82,7 +100,7 @@ npm run dev    # buka http://localhost:5173
 ## Struktur proyek
 
 ```
-backend/    # REST API (Node.js), PostgreSQL (driver pg), skema + seed
+backend/    # REST API (Node.js), PostgreSQL, skema + seed
 frontend/   # Aplikasi React (Vite + Tailwind)
 ```
 

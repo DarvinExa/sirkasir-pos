@@ -182,8 +182,60 @@ function build() {
   return { roles, users, categories, ingredients, menu_items, recipes, tables, suppliers, customers, promos, settings };
 }
 
+// Mode KOSONG: hanya role + satu akun admin + pengaturan default.
+// Dipakai orang yang mengunduh dari GitHub supaya bisa langsung mengisi data
+// toko mereka sendiri (tanpa data contoh).
+function buildBlank() {
+  const roles = [
+    { id: 'role_owner', name: 'owner', label: 'Owner / Super Admin' },
+    { id: 'role_kasir', name: 'kasir', label: 'Kasir' },
+  ];
+
+  const adminEmail = (process.env.ADMIN_EMAIL || 'admin@sirkasir.test').toLowerCase();
+  const adminName = process.env.ADMIN_NAME || 'Administrator';
+  const users = [
+    {
+      id: uid('usr'),
+      name: adminName,
+      email: adminEmail,
+      password_hash: hashPassword(process.env.ADMIN_PASSWORD || 'admin123'),
+      pin_hash: hashPassword(process.env.ADMIN_PIN || '1111'),
+      role: 'owner',
+      status: 'active',
+    },
+  ];
+
+  const settings = {
+    store_name: process.env.STORE_NAME || 'Toko Saya',
+    address: '',
+    phone: '',
+    currency: 'IDR',
+    tax_percent: 0,
+    service_percent: 0,
+    rounding: 0,
+    loyalty: { enabled: false, earn_per: 1000, point_value: 100 },
+    footer_note: 'Terima kasih!',
+  };
+
+  return {
+    roles,
+    users,
+    categories: [],
+    ingredients: [],
+    menu_items: [],
+    recipes: [],
+    tables: [],
+    suppliers: [],
+    customers: [],
+    promos: [],
+    settings,
+  };
+}
+
+const BLANK = process.env.SEED_MODE === 'blank' || process.argv.includes('--blank');
+
 async function main() {
-  const data = build();
+  const data = BLANK ? buildBlank() : build();
   await tx(async (client) => {
     const clearOrder = [
       'transactions', 'stock_movements', 'opnames', 'purchase_orders', 'shifts',
@@ -205,9 +257,22 @@ async function main() {
     await repo.insertSettings(data.settings, client);
   });
 
-  console.log('Database PostgreSQL berhasil diisi data awal.');
-  console.log('   Login Owner  -> email: owner@sirkasir.test | password: owner123 | PIN: 1111');
-  console.log('   Login Kasir  -> email: kasir@sirkasir.test | password: kasir123 | PIN: 2222');
+  if (BLANK) {
+    console.log('Database PostgreSQL siap (mode KOSONG, tanpa data contoh).');
+    console.log(
+      '   Login Admin -> email: ' +
+        data.users[0].email +
+        ' | password: ' +
+        (process.env.ADMIN_PASSWORD || 'admin123') +
+        ' | PIN: ' +
+        (process.env.ADMIN_PIN || '1111')
+    );
+    console.log('   >>> Segera GANTI password default setelah login pertama.');
+  } else {
+    console.log('Database PostgreSQL berhasil diisi data awal (mode DEMO).');
+    console.log('   Login Owner  -> email: owner@sirkasir.test | password: owner123 | PIN: 1111');
+    console.log('   Login Kasir  -> email: kasir@sirkasir.test | password: kasir123 | PIN: 2222');
+  }
   await pool.end();
 }
 

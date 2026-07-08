@@ -6,7 +6,9 @@
   "scripts": {
     "migrate": "node src/db/migrate.js",
     "seed": "node src/seed.js",
+    "seed:blank": "node src/seed.js --blank",
     "setup": "node src/db/migrate.js && node src/seed.js",
+    "setup:blank": "node src/db/migrate.js && node src/seed.js --blank",
     "start": "node src/server.js",
     "dev": "node --watch src/server.js"
   },
