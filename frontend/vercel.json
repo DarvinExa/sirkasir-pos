@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://sirkasir-api.onrender.com/api/:path*"
+      "destination": "https://sirkasir-pos.onrender.com/api/:path*"
     },
     {
       "source": "/(.*)",
