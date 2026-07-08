@@ -1,4 +1,4 @@
-const db = require('../db');
+const repo = require('../repo');
 
 function dayKey(iso) {
   return iso.slice(0, 10);
@@ -22,8 +22,9 @@ module.exports = [
     auth: true,
     handler: async ({ query }) => {
       const date = query.date || todayKey();
-      const d = db.get();
-      const paid = d.transactions.filter((t) => t.status === 'paid');
+      const transactions = await repo.transactions.all();
+      const ingredients = await repo.ingredients.all();
+      const paid = transactions.filter((t) => t.status === 'paid');
       const today = paid.filter((t) => dayKey(t.created_at) === date);
 
       const revenue = today.reduce((s, t) => s + t.total, 0);
@@ -31,7 +32,6 @@ module.exports = [
       const count = today.length;
       const avg = count ? Math.round(revenue / count) : 0;
 
-      // Top sellers hari ini
       const productMap = {};
       for (const t of today) {
         for (const it of t.items) {
@@ -44,7 +44,6 @@ module.exports = [
       }
       const topProducts = Object.values(productMap).sort((a, b) => b.qty - a.qty).slice(0, 5);
 
-      // Pembayaran per metode
       const payMap = {};
       for (const t of today) {
         for (const p of t.payments) {
@@ -53,7 +52,6 @@ module.exports = [
       }
       const payments = Object.entries(payMap).map(([method, amount]) => ({ method, amount }));
 
-      // Penjualan per jam
       const hourly = Array.from({ length: 24 }, (_, h) => ({ hour: h, revenue: 0, count: 0 }));
       for (const t of today) {
         const h = new Date(t.created_at).getHours();
@@ -61,8 +59,7 @@ module.exports = [
         hourly[h].count += 1;
       }
 
-      // Stok menipis
-      const lowStock = d.ingredients
+      const lowStock = ingredients
         .filter((i) => (i.stock || 0) <= (i.min_stock || 0))
         .map((i) => ({ id: i.id, name: i.name, stock: i.stock, min_stock: i.min_stock, unit: i.unit }));
 
@@ -74,9 +71,9 @@ module.exports = [
     path: '/api/reports/sales',
     auth: true,
     handler: async ({ query }) => {
-      const d = db.get();
       const days = Math.min(90, Math.max(1, parseInt(query.days, 10) || 7));
-      const paid = d.transactions.filter((t) => t.status === 'paid');
+      const transactions = await repo.transactions.all();
+      const paid = transactions.filter((t) => t.status === 'paid');
       const series = [];
       for (let i = days - 1; i >= 0; i--) {
         const dt = new Date();
@@ -100,8 +97,10 @@ module.exports = [
     path: '/api/reports/analytics',
     auth: true,
     handler: async ({ query }) => {
-      const d = db.get();
-      const paid = d.transactions.filter((t) => t.status === 'paid');
+      const transactions = await repo.transactions.all();
+      const menu_items = await repo.menuItems.all();
+      const categories = await repo.categories.all();
+      const paid = transactions.filter((t) => t.status === 'paid');
       const to = query.to || todayKey();
       const from = query.from || to;
       const dayMs = 86400000;
@@ -158,8 +157,8 @@ module.exports = [
       const cm = {};
       for (const t of cur) {
         for (const it of t.items) {
-          const mi = d.menu_items.find((m) => m.id === it.menu_item_id);
-          const cat = mi ? (d.categories.find((c) => c.id === mi.category_id) || {}).name : null;
+          const mi = menu_items.find((m) => m.id === it.menu_item_id);
+          const cat = mi ? (categories.find((c) => c.id === mi.category_id) || {}).name : null;
           const name = cat || 'Lainnya';
           if (!cm[name]) cm[name] = { category: name, revenue: 0, qty: 0 };
           cm[name].revenue += it.subtotal;

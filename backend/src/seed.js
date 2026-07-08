@@ -1,6 +1,9 @@
+// Mengisi data awal ke PostgreSQL. Jalankan setelah migrate:
+//   npm run migrate && npm run seed  (atau: npm run setup)
 const { hashPassword } = require('./auth');
-const db = require('./db');
 const { uid } = require('./utils');
+const repo = require('./repo');
+const { pool, tx } = repo;
 
 function build() {
   const roles = [
@@ -133,7 +136,6 @@ function build() {
     }
   }
 
-  // Meja / tables
   const tables = [
     { id: 'tbl_1', name: 'Meja 1', area: 'Indoor', seats: 4, status: 'available' },
     { id: 'tbl_2', name: 'Meja 2', area: 'Indoor', seats: 4, status: 'available' },
@@ -157,13 +159,11 @@ function build() {
     footer_note: 'Terima kasih! Selamat menikmati!',
   };
 
-  // Supplier
   const suppliers = [
     { id: 'sup_pangan', name: 'CV Sumber Pangan', phone: '0813-1111-2222', contact: 'Pak Joko', note: 'Beras, telur, ayam' },
     { id: 'sup_sayur', name: 'Toko Sayur Segar', phone: '0857-3333-4444', contact: 'Bu Ani', note: 'Minyak, gula, teh, kopi' },
   ];
 
-  // Pelanggan / member loyalty
   const now = new Date().toISOString();
   const customers = [
     { id: 'cst_budi', name: 'Budi Santoso', phone: '0812-5555-1111', email: '', note: 'Langganan kopi pagi', points: 120, visits: 8, total_spent: 96000, last_visit: now, point_history: [], created_at: now },
@@ -171,7 +171,6 @@ function build() {
     { id: 'cst_rian', name: 'Rian Pratama', phone: '0821-5555-3333', email: '', note: 'Suka pedas', points: 0, visits: 0, total_spent: 0, last_visit: null, point_history: [], created_at: now },
   ];
 
-  // Promo & diskon otomatis
   const promos = [
     { id: 'promo_diskon10', name: 'Diskon 10% (min. belanja 25rb)', type: 'percent', value: 10, active: true, code: '', min_subtotal: 25000, max_discount: 15000, member_only: false, days: [], start_hour: null, end_hour: null, applies_to: 'all', buy_qty: 1, get_qty: 1, stackable: false, priority: 1, created_at: now },
     { id: 'promo_happyhour', name: 'Happy Hour 20% (jam 15-18)', type: 'percent', value: 20, active: true, code: '', min_subtotal: 0, max_discount: 0, member_only: false, days: [], start_hour: 15, end_hour: 18, applies_to: 'all', buy_qty: 1, get_qty: 1, stackable: true, priority: 2, created_at: now },
@@ -180,30 +179,39 @@ function build() {
     { id: 'promo_bogo_esteh', name: 'Beli 2 Es Teh Gratis 1', type: 'bogo', value: 0, active: false, code: '', min_subtotal: 0, max_discount: 0, member_only: false, days: [], start_hour: null, end_hour: null, applies_to: 'menu_esteh', buy_qty: 2, get_qty: 1, stackable: false, priority: 4, created_at: now },
   ];
 
-  return {
-    schema_version: 5,
-    roles,
-    users,
-    categories,
-    ingredients,
-    menu_items,
-    recipes,
-    tables,
-    orders: [],
-    suppliers,
-    customers,
-    purchase_orders: [],
-    shifts: [],
-    opnames: [],
-    stock_movements: [],
-    transactions: [],
-    counters: {},
-    promos,
-    settings,
-  };
+  return { roles, users, categories, ingredients, menu_items, recipes, tables, suppliers, customers, promos, settings };
 }
 
-db.writeRaw(build());
-console.log('Database berhasil dibuat di:', db.DB_FILE);
-console.log('   Login Owner  -> email: owner@sirkasir.test | password: owner123 | PIN: 1111');
-console.log('   Login Kasir  -> email: kasir@sirkasir.test | password: kasir123 | PIN: 2222');
+async function main() {
+  const data = build();
+  await tx(async (client) => {
+    const clearOrder = [
+      'transactions', 'stock_movements', 'opnames', 'purchase_orders', 'shifts',
+      'orders', 'recipes', 'menu_items', 'ingredients', 'categories', 'customers',
+      'suppliers', 'promos', 'dining_tables', 'counters', 'settings', 'users', 'roles',
+    ];
+    for (const t of clearOrder) await client.query(`DELETE FROM ${t}`);
+
+    for (const r of data.roles) await repo.roles.insert(r, client);
+    for (const u of data.users) await repo.users.insert(u, client);
+    for (const c of data.categories) await repo.categories.insert(c, client);
+    for (const i of data.ingredients) await repo.ingredients.insert(i, client);
+    for (const m of data.menu_items) await repo.menuItems.insert(m, client);
+    for (const r of data.recipes) await repo.recipes.insert(r, client);
+    for (const t of data.tables) await repo.tables.insert(t, client);
+    for (const s of data.suppliers) await repo.suppliers.insert(s, client);
+    for (const c of data.customers) await repo.customers.insert(c, client);
+    for (const p of data.promos) await repo.promos.insert(p, client);
+    await repo.insertSettings(data.settings, client);
+  });
+
+  console.log('Database PostgreSQL berhasil diisi data awal.');
+  console.log('   Login Owner  -> email: owner@sirkasir.test | password: owner123 | PIN: 1111');
+  console.log('   Login Kasir  -> email: kasir@sirkasir.test | password: kasir123 | PIN: 2222');
+  await pool.end();
+}
+
+main().catch((err) => {
+  console.error('Seed gagal:', err.message);
+  process.exit(1);
+});

@@ -1,5 +1,5 @@
 // Rute pelanggan / member & poin loyalty.
-const db = require('../db');
+const repo = require('../repo');
 const { HttpError, uid } = require('../utils');
 const loyalty = require('../loyalty');
 
@@ -8,14 +8,14 @@ module.exports = [
     method: 'GET',
     path: '/api/loyalty/config',
     auth: true,
-    handler: async () => loyalty.config(db.get()),
+    handler: async () => loyalty.config(await repo.getSettings()),
   },
   {
     method: 'GET',
     path: '/api/customers',
     auth: true,
     handler: async ({ query }) => {
-      let list = (db.get().customers || []).slice();
+      let list = await repo.customers.all();
       if (query.q) {
         const q = String(query.q).toLowerCase();
         list = list.filter(
@@ -35,11 +35,10 @@ module.exports = [
     path: '/api/customers/:id',
     auth: true,
     handler: async ({ params }) => {
-      const d = db.get();
-      const c = (d.customers || []).find((x) => x.id === params.id);
+      const c = await repo.customers.find(params.id);
       if (!c) throw new HttpError(404, 'Pelanggan tidak ditemukan.');
-      const transactions = d.transactions
-        .filter((t) => t.customer_id === c.id && t.status !== 'void')
+      const transactions = (await repo.transactions.where('customer_id = $1', [c.id]))
+        .filter((t) => t.status !== 'void')
         .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
         .slice(0, 20);
       return { ...c, transactions };
@@ -50,12 +49,12 @@ module.exports = [
     path: '/api/customers',
     auth: true,
     handler: async ({ body }) => {
-      const d = db.get();
-      d.customers = d.customers || [];
       if (!body.name || !String(body.name).trim()) throw new HttpError(400, 'Nama pelanggan wajib diisi.');
       const phone = (body.phone || '').trim();
-      if (phone && d.customers.some((c) => c.phone === phone))
-        throw new HttpError(400, 'Nomor HP sudah terdaftar.');
+      if (phone) {
+        const dup = await repo.customers.where('phone = $1', [phone]);
+        if (dup.length) throw new HttpError(400, 'Nomor HP sudah terdaftar.');
+      }
       const c = {
         id: uid('cst'),
         name: String(body.name).trim(),
@@ -69,8 +68,7 @@ module.exports = [
         point_history: [],
         created_at: new Date().toISOString(),
       };
-      d.customers.push(c);
-      db.save();
+      await repo.customers.insert(c);
       return c;
     },
   },
@@ -79,19 +77,20 @@ module.exports = [
     path: '/api/customers/:id',
     auth: true,
     handler: async ({ params, body }) => {
-      const d = db.get();
-      const c = (d.customers || []).find((x) => x.id === params.id);
+      const c = await repo.customers.find(params.id);
       if (!c) throw new HttpError(404, 'Pelanggan tidak ditemukan.');
       if (body.name != null) c.name = String(body.name).trim();
       if (body.phone != null) {
         const phone = String(body.phone).trim();
-        if (phone && d.customers.some((x) => x.id !== c.id && x.phone === phone))
-          throw new HttpError(400, 'Nomor HP sudah terdaftar.');
+        if (phone) {
+          const dup = await repo.customers.where('phone = $1 AND id <> $2', [phone, c.id]);
+          if (dup.length) throw new HttpError(400, 'Nomor HP sudah terdaftar.');
+        }
         c.phone = phone;
       }
       if (body.email != null) c.email = String(body.email).trim();
       if (body.note != null) c.note = body.note;
-      db.save();
+      await repo.customers.update(c);
       return c;
     },
   },
@@ -101,8 +100,7 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ params, body }) => {
-      const d = db.get();
-      const c = (d.customers || []).find((x) => x.id === params.id);
+      const c = await repo.customers.find(params.id);
       if (!c) throw new HttpError(404, 'Pelanggan tidak ditemukan.');
       const delta = parseInt(body.delta, 10) || 0;
       if (!delta) throw new HttpError(400, 'Jumlah penyesuaian poin tidak boleh 0.');
@@ -118,7 +116,7 @@ module.exports = [
         note: body.note || 'Penyesuaian manual',
         created_at: new Date().toISOString(),
       });
-      db.save();
+      await repo.customers.update(c);
       return c;
     },
   },
@@ -128,11 +126,9 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ params }) => {
-      const d = db.get();
-      const idx = (d.customers || []).findIndex((x) => x.id === params.id);
-      if (idx === -1) throw new HttpError(404, 'Pelanggan tidak ditemukan.');
-      d.customers.splice(idx, 1);
-      db.save();
+      const c = await repo.customers.find(params.id);
+      if (!c) throw new HttpError(404, 'Pelanggan tidak ditemukan.');
+      await repo.customers.remove(params.id);
       return { ok: true };
     },
   },

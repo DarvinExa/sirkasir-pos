@@ -1,6 +1,6 @@
 // Mesin promo & diskon otomatis.
 //
-// Bentuk sebuah promo (disimpan di db.promos):
+// Bentuk sebuah promo (tabel promos):
 //   id, name, active
 //   type: 'percent' | 'fixed' | 'bogo'
 //   value            : persen (utk percent) atau nominal (utk fixed)
@@ -83,10 +83,10 @@ function match(promo, { items, subtotal, customer, now, code }) {
 // Evaluasi seluruh promo aktif, pilih kombinasi paling menguntungkan pelanggan.
 // Aturan: jumlahkan semua promo stackable, ATAU pakai satu promo eksklusif
 // dgn potongan terbesar - mana yang totalnya lebih besar untuk pelanggan.
-function evaluate(d, { items, subtotal, customer, now, code }) {
+function evaluate(promosList, { items, subtotal, customer, now, code }) {
   now = now || new Date();
   subtotal = Math.max(0, Number(subtotal) || 0);
-  const list = Array.isArray(d.promos) ? d.promos : [];
+  const list = Array.isArray(promosList) ? promosList : [];
   const matched = [];
   for (const p of list) {
     const m = match(p, { items: items || [], subtotal, customer, now, code });

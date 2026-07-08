@@ -1,30 +1,17 @@
 // Back office: shift & kas, supplier, purchase order (PO), stok opname, laporan profit/BOM.
-const db = require('../db');
+const repo = require('../repo');
 const { HttpError, uid } = require('../utils');
+const { round2 } = require('../stock');
 
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
-function pad(n) {
-  return String(n).padStart(2, '0');
-}
-function seqNo(d, prefix) {
-  const now = new Date();
-  const key = prefix + '-' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate());
-  d.counters = d.counters || {};
-  d.counters[key] = (d.counters[key] || 0) + 1;
-  return key + '-' + String(d.counters[key]).padStart(4, '0');
-}
 function dayKey(iso) {
   return iso.slice(0, 10);
 }
 
-// Shift helpers
 // Ringkasan kas sebuah shift dalam rentang waktu bukanya.
-function shiftSummary(d, shift, endTime) {
+function shiftSummary(shift, transactions, endTime) {
   const start = shift.opened_at;
   const end = endTime || new Date().toISOString();
-  const txns = d.transactions.filter(
+  const txns = transactions.filter(
     (t) => t.status === 'paid' && t.created_at >= start && t.created_at <= end
   );
   let cashSales = 0;
@@ -32,7 +19,6 @@ function shiftSummary(d, shift, endTime) {
   for (const t of txns) {
     const cashPaid = t.payments.filter((p) => p.method === 'cash').reduce((s, p) => s + p.amount, 0);
     const nonCash = t.payments.filter((p) => p.method !== 'cash').reduce((s, p) => s + p.amount, 0);
-    // Kas yang benar-benar masuk laci = tunai diterima dikurangi kembalian.
     cashSales += Math.max(0, cashPaid - (t.change || 0));
     nonCashSales += nonCash;
   }
@@ -61,10 +47,10 @@ module.exports = [
     path: '/api/shifts/current',
     auth: true,
     handler: async () => {
-      const d = db.get();
-      const open = d.shifts.find((s) => s.status === 'open');
+      const open = (await repo.shifts.where("status = 'open'", []))[0];
       if (!open) return { shift: null };
-      return { shift: open, summary: shiftSummary(d, open) };
+      const transactions = await repo.transactions.all();
+      return { shift: open, summary: shiftSummary(open, transactions) };
     },
   },
   {
@@ -72,13 +58,13 @@ module.exports = [
     path: '/api/shifts',
     auth: true,
     handler: async () => {
-      const d = db.get();
-      return d.shifts
-        .slice()
+      const shifts = await repo.shifts.all();
+      const transactions = await repo.transactions.all();
+      return shifts
         .sort((a, b) => (a.opened_at < b.opened_at ? 1 : -1))
         .map((s) => ({
           ...s,
-          summary: s.status === 'open' ? shiftSummary(d, s) : s.closing,
+          summary: s.status === 'open' ? shiftSummary(s, transactions) : s.closing,
         }));
     },
   },
@@ -87,10 +73,10 @@ module.exports = [
     path: '/api/shifts/:id',
     auth: true,
     handler: async ({ params }) => {
-      const d = db.get();
-      const s = d.shifts.find((x) => x.id === params.id);
+      const s = await repo.shifts.find(params.id);
       if (!s) throw new HttpError(404, 'Shift tidak ditemukan.');
-      return { ...s, summary: s.status === 'open' ? shiftSummary(d, s) : s.closing };
+      const transactions = await repo.transactions.all();
+      return { ...s, summary: s.status === 'open' ? shiftSummary(s, transactions) : s.closing };
     },
   },
   {
@@ -98,8 +84,8 @@ module.exports = [
     path: '/api/shifts/open',
     auth: true,
     handler: async ({ body, user }) => {
-      const d = db.get();
-      if (d.shifts.some((s) => s.status === 'open')) {
+      const open = await repo.shifts.where("status = 'open'", []);
+      if (open.length) {
         throw new HttpError(400, 'Masih ada shift yang terbuka. Tutup dulu sebelum buka baru.');
       }
       const shift = {
@@ -112,10 +98,10 @@ module.exports = [
         status: 'open',
         opened_at: new Date().toISOString(),
         closed_at: null,
+        closed_by: null,
         closing: null,
       };
-      d.shifts.push(shift);
-      db.save();
+      await repo.shifts.insert(shift);
       return shift;
     },
   },
@@ -124,13 +110,13 @@ module.exports = [
     path: '/api/shifts/:id/cash',
     auth: true,
     handler: async ({ params, body, user }) => {
-      const d = db.get();
-      const s = d.shifts.find((x) => x.id === params.id);
+      const s = await repo.shifts.find(params.id);
       if (!s) throw new HttpError(404, 'Shift tidak ditemukan.');
       if (s.status !== 'open') throw new HttpError(400, 'Shift sudah ditutup.');
       const type = body.type === 'out' ? 'out' : 'in';
       const amount = Math.max(0, Number(body.amount) || 0);
       if (amount <= 0) throw new HttpError(400, 'Nominal harus lebih dari 0.');
+      s.cash_movements = s.cash_movements || [];
       s.cash_movements.push({
         id: uid('csh'),
         type,
@@ -140,8 +126,9 @@ module.exports = [
         user_name: user.name,
         created_at: new Date().toISOString(),
       });
-      db.save();
-      return { ...s, summary: shiftSummary(d, s) };
+      await repo.shifts.update(s);
+      const transactions = await repo.transactions.all();
+      return { ...s, summary: shiftSummary(s, transactions) };
     },
   },
   {
@@ -149,12 +136,12 @@ module.exports = [
     path: '/api/shifts/:id/close',
     auth: true,
     handler: async ({ params, body, user }) => {
-      const d = db.get();
-      const s = d.shifts.find((x) => x.id === params.id);
+      const s = await repo.shifts.find(params.id);
       if (!s) throw new HttpError(404, 'Shift tidak ditemukan.');
       if (s.status !== 'open') throw new HttpError(400, 'Shift sudah ditutup.');
       const closedAt = new Date().toISOString();
-      const summary = shiftSummary(d, s, closedAt);
+      const transactions = await repo.transactions.all();
+      const summary = shiftSummary(s, transactions, closedAt);
       const countedCash = Math.max(0, Number(body.counted_cash) || 0);
       s.status = 'closed';
       s.closed_at = closedAt;
@@ -166,7 +153,7 @@ module.exports = [
         variance: round2(countedCash - summary.expected_cash),
         note: body.note || '',
       };
-      db.save();
+      await repo.shifts.update(s);
       return s;
     },
   },
@@ -176,7 +163,7 @@ module.exports = [
     method: 'GET',
     path: '/api/suppliers',
     auth: true,
-    handler: async () => db.get().suppliers.slice(),
+    handler: async () => repo.suppliers.all(),
   },
   {
     method: 'POST',
@@ -184,7 +171,6 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ body }) => {
-      const d = db.get();
       if (!body.name) throw new HttpError(400, 'Nama supplier wajib diisi.');
       const sup = {
         id: uid('sup'),
@@ -193,8 +179,7 @@ module.exports = [
         contact: body.contact || '',
         note: body.note || '',
       };
-      d.suppliers.push(sup);
-      db.save();
+      await repo.suppliers.insert(sup);
       return sup;
     },
   },
@@ -204,13 +189,12 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ params, body }) => {
-      const d = db.get();
-      const sup = d.suppliers.find((x) => x.id === params.id);
+      const sup = await repo.suppliers.find(params.id);
       if (!sup) throw new HttpError(404, 'Supplier tidak ditemukan.');
       for (const k of ['name', 'phone', 'contact', 'note']) {
         if (body[k] != null) sup[k] = body[k];
       }
-      db.save();
+      await repo.suppliers.update(sup);
       return sup;
     },
   },
@@ -220,11 +204,9 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ params }) => {
-      const d = db.get();
-      const idx = d.suppliers.findIndex((x) => x.id === params.id);
-      if (idx === -1) throw new HttpError(404, 'Supplier tidak ditemukan.');
-      d.suppliers.splice(idx, 1);
-      db.save();
+      const sup = await repo.suppliers.find(params.id);
+      if (!sup) throw new HttpError(404, 'Supplier tidak ditemukan.');
+      await repo.suppliers.remove(params.id);
       return { ok: true };
     },
   },
@@ -236,7 +218,7 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async () =>
-      db.get().purchase_orders.slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1)),
+      (await repo.purchaseOrders.all()).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)),
   },
   {
     method: 'GET',
@@ -244,7 +226,7 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ params }) => {
-      const po = db.get().purchase_orders.find((x) => x.id === params.id);
+      const po = await repo.purchaseOrders.find(params.id);
       if (!po) throw new HttpError(404, 'PO tidak ditemukan.');
       return po;
     },
@@ -255,39 +237,41 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ body, user }) => {
-      const d = db.get();
-      const supplier = d.suppliers.find((s) => s.id === body.supplier_id);
-      if (!supplier) throw new HttpError(400, 'Supplier tidak valid.');
-      const rawItems = Array.isArray(body.items) ? body.items : [];
-      if (rawItems.length === 0) throw new HttpError(400, 'Item PO tidak boleh kosong.');
-      const items = [];
-      let total = 0;
-      for (const ri of rawItems) {
-        const ing = d.ingredients.find((i) => i.id === ri.ingredient_id);
-        if (!ing) throw new HttpError(400, `Bahan tidak ditemukan: ${ri.ingredient_id}`);
-        const qty = Number(ri.qty) || 0;
-        const unitCost = Number(ri.unit_cost) || 0;
-        if (qty <= 0) throw new HttpError(400, `Qty tidak valid untuk ${ing.name}.`);
-        const sub = round2(qty * unitCost);
-        total += sub;
-        items.push({ ingredient_id: ing.id, name: ing.name, unit: ing.unit, qty, unit_cost: unitCost, subtotal: sub });
-      }
-      const po = {
-        id: uid('po'),
-        po_no: seqNo(d, 'PO'),
-        supplier_id: supplier.id,
-        supplier_name: supplier.name,
-        items,
-        total: round2(total),
-        note: body.note || '',
-        status: 'draft',
-        created_by: user.name,
-        created_at: new Date().toISOString(),
-        received_at: null,
-      };
-      d.purchase_orders.push(po);
-      db.save();
-      return po;
+      return repo.tx(async (client) => {
+        const supplier = await repo.suppliers.find(body.supplier_id, client);
+        if (!supplier) throw new HttpError(400, 'Supplier tidak valid.');
+        const rawItems = Array.isArray(body.items) ? body.items : [];
+        if (rawItems.length === 0) throw new HttpError(400, 'Item PO tidak boleh kosong.');
+        const ingredients = await repo.ingredients.all(client);
+        const items = [];
+        let total = 0;
+        for (const ri of rawItems) {
+          const ing = ingredients.find((i) => i.id === ri.ingredient_id);
+          if (!ing) throw new HttpError(400, `Bahan tidak ditemukan: ${ri.ingredient_id}`);
+          const qty = Number(ri.qty) || 0;
+          const unitCost = Number(ri.unit_cost) || 0;
+          if (qty <= 0) throw new HttpError(400, `Qty tidak valid untuk ${ing.name}.`);
+          const sub = round2(qty * unitCost);
+          total += sub;
+          items.push({ ingredient_id: ing.id, name: ing.name, unit: ing.unit, qty, unit_cost: unitCost, subtotal: sub });
+        }
+        const po = {
+          id: uid('po'),
+          po_no: await repo.counterNo('PO', 4, client),
+          supplier_id: supplier.id,
+          supplier_name: supplier.name,
+          items,
+          total: round2(total),
+          note: body.note || '',
+          status: 'draft',
+          created_by: user.name,
+          created_at: new Date().toISOString(),
+          received_at: null,
+          received_by: null,
+        };
+        await repo.purchaseOrders.insert(po, client);
+        return po;
+      });
     },
   },
   {
@@ -296,35 +280,39 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ params, user }) => {
-      const d = db.get();
-      const po = d.purchase_orders.find((x) => x.id === params.id);
-      if (!po) throw new HttpError(404, 'PO tidak ditemukan.');
-      if (po.status === 'received') throw new HttpError(400, 'PO sudah diterima.');
-      for (const it of po.items) {
-        const ing = d.ingredients.find((i) => i.id === it.ingredient_id);
-        if (!ing) continue;
-        const oldStock = ing.stock || 0;
-        const newStock = round2(oldStock + it.qty);
-        // Harga pokok rata-rata tertimbang (weighted average).
-        if (newStock > 0) {
-          ing.cost_avg = round2((oldStock * ing.cost_avg + it.qty * it.unit_cost) / newStock);
+      return repo.tx(async (client) => {
+        const po = await repo.purchaseOrders.find(params.id, client);
+        if (!po) throw new HttpError(404, 'PO tidak ditemukan.');
+        if (po.status === 'received') throw new HttpError(400, 'PO sudah diterima.');
+        for (const it of po.items) {
+          const ing = await repo.ingredients.find(it.ingredient_id, client);
+          if (!ing) continue;
+          const oldStock = ing.stock || 0;
+          const newStock = round2(oldStock + it.qty);
+          if (newStock > 0) {
+            ing.cost_avg = round2((oldStock * ing.cost_avg + it.qty * it.unit_cost) / newStock);
+          }
+          ing.stock = newStock;
+          await repo.ingredients.update(ing, client);
+          await repo.stockMovements.insert(
+            {
+              id: uid('mov'),
+              ingredient_id: ing.id,
+              type: 'purchase',
+              qty: round2(it.qty),
+              ref: po.po_no,
+              user_id: user.id,
+              created_at: new Date().toISOString(),
+            },
+            client
+          );
         }
-        ing.stock = newStock;
-        d.stock_movements.push({
-          id: uid('mov'),
-          ingredient_id: ing.id,
-          type: 'purchase',
-          qty: round2(it.qty),
-          ref: po.po_no,
-          user_id: user.id,
-          created_at: new Date().toISOString(),
-        });
-      }
-      po.status = 'received';
-      po.received_at = new Date().toISOString();
-      po.received_by = user.name;
-      db.save();
-      return po;
+        po.status = 'received';
+        po.received_at = new Date().toISOString();
+        po.received_by = user.name;
+        await repo.purchaseOrders.update(po, client);
+        return po;
+      });
     },
   },
   {
@@ -333,12 +321,10 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ params }) => {
-      const d = db.get();
-      const po = d.purchase_orders.find((x) => x.id === params.id);
+      const po = await repo.purchaseOrders.find(params.id);
       if (!po) throw new HttpError(404, 'PO tidak ditemukan.');
       if (po.status === 'received') throw new HttpError(400, 'PO yang sudah diterima tidak bisa dihapus.');
-      d.purchase_orders = d.purchase_orders.filter((x) => x.id !== params.id);
-      db.save();
+      await repo.purchaseOrders.remove(params.id);
       return { ok: true };
     },
   },
@@ -350,7 +336,7 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async () =>
-      db.get().opnames.slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1)),
+      (await repo.opnames.all()).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)),
   },
   {
     method: 'GET',
@@ -358,7 +344,7 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ params }) => {
-      const op = db.get().opnames.find((x) => x.id === params.id);
+      const op = await repo.opnames.find(params.id);
       if (!op) throw new HttpError(404, 'Opname tidak ditemukan.');
       return op;
     },
@@ -369,56 +355,59 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ body, user }) => {
-      const d = db.get();
-      const rawItems = Array.isArray(body.items) ? body.items : [];
-      if (rawItems.length === 0) throw new HttpError(400, 'Tidak ada bahan yang dihitung.');
-      const items = [];
-      let totalVarValue = 0;
-      for (const ri of rawItems) {
-        const ing = d.ingredients.find((i) => i.id === ri.ingredient_id);
-        if (!ing) continue;
-        const systemQty = ing.stock || 0;
-        const counted = Number(ri.counted);
-        if (Number.isNaN(counted)) continue;
-        const variance = round2(counted - systemQty);
-        const varValue = round2(variance * ing.cost_avg);
-        totalVarValue += varValue;
-        items.push({
-          ingredient_id: ing.id,
-          name: ing.name,
-          unit: ing.unit,
-          system_qty: round2(systemQty),
-          counted: round2(counted),
-          variance,
-          cost_avg: ing.cost_avg,
-          variance_value: varValue,
-        });
-        // Sesuaikan stok ke hasil hitung fisik.
-        ing.stock = round2(counted);
-        if (variance !== 0) {
-          d.stock_movements.push({
-            id: uid('mov'),
+      return repo.tx(async (client) => {
+        const rawItems = Array.isArray(body.items) ? body.items : [];
+        if (rawItems.length === 0) throw new HttpError(400, 'Tidak ada bahan yang dihitung.');
+        const items = [];
+        let totalVarValue = 0;
+        for (const ri of rawItems) {
+          const ing = await repo.ingredients.find(ri.ingredient_id, client);
+          if (!ing) continue;
+          const systemQty = ing.stock || 0;
+          const counted = Number(ri.counted);
+          if (Number.isNaN(counted)) continue;
+          const variance = round2(counted - systemQty);
+          const varValue = round2(variance * ing.cost_avg);
+          totalVarValue += varValue;
+          items.push({
             ingredient_id: ing.id,
-            type: 'opname',
-            qty: variance,
-            ref: 'opname',
-            user_id: user.id,
-            created_at: new Date().toISOString(),
+            name: ing.name,
+            unit: ing.unit,
+            system_qty: round2(systemQty),
+            counted: round2(counted),
+            variance,
+            cost_avg: ing.cost_avg,
+            variance_value: varValue,
           });
+          ing.stock = round2(counted);
+          await repo.ingredients.update(ing, client);
+          if (variance !== 0) {
+            await repo.stockMovements.insert(
+              {
+                id: uid('mov'),
+                ingredient_id: ing.id,
+                type: 'opname',
+                qty: variance,
+                ref: 'opname',
+                user_id: user.id,
+                created_at: new Date().toISOString(),
+              },
+              client
+            );
+          }
         }
-      }
-      const op = {
-        id: uid('opn'),
-        opname_no: seqNo(d, 'OPN'),
-        items,
-        total_variance_value: round2(totalVarValue),
-        note: body.note || '',
-        created_by: user.name,
-        created_at: new Date().toISOString(),
-      };
-      d.opnames.push(op);
-      db.save();
-      return op;
+        const op = {
+          id: uid('opn'),
+          opname_no: await repo.counterNo('OPN', 4, client),
+          items,
+          total_variance_value: round2(totalVarValue),
+          note: body.note || '',
+          created_by: user.name,
+          created_at: new Date().toISOString(),
+        };
+        await repo.opnames.insert(op, client);
+        return op;
+      });
     },
   },
 
@@ -429,8 +418,7 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ query }) => {
-      const d = db.get();
-      let txns = d.transactions.filter((t) => t.status === 'paid');
+      let txns = (await repo.transactions.all()).filter((t) => t.status === 'paid');
       if (query.from) txns = txns.filter((t) => dayKey(t.created_at) >= query.from);
       if (query.to) txns = txns.filter((t) => dayKey(t.created_at) <= query.to);
       const map = {};
@@ -470,12 +458,14 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async () => {
-      const d = db.get();
-      return d.menu_items.map((m) => {
-        const recipes = d.recipes
+      const menu_items = await repo.menuItems.all();
+      const allRecipes = await repo.recipes.all();
+      const ingredients = await repo.ingredients.all();
+      return menu_items.map((m) => {
+        const recipes = allRecipes
           .filter((r) => r.menu_item_id === m.id)
           .map((r) => {
-            const ing = d.ingredients.find((i) => i.id === r.ingredient_id);
+            const ing = ingredients.find((i) => i.id === r.ingredient_id);
             return {
               ingredient_id: r.ingredient_id,
               name: ing ? ing.name : '?',
@@ -505,8 +495,8 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async () => {
-      const d = db.get();
-      const items = d.ingredients.map((i) => ({
+      const ingredients = await repo.ingredients.all();
+      const items = ingredients.map((i) => ({
         id: i.id,
         name: i.name,
         unit: i.unit,

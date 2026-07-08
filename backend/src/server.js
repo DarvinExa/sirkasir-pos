@@ -1,8 +1,8 @@
 const http = require('http');
 const { sendJson, readBody } = require('./http');
-const db = require('./db');
 const { verifyToken } = require('./auth');
 const { HttpError } = require('./utils');
+const { pool, users } = require('./repo');
 const routes = require('./routes');
 
 const PORT = process.env.PORT || 4000;
@@ -34,12 +34,12 @@ function matchRoute(pattern, pathname) {
   return params;
 }
 
-function currentUser(req) {
+async function currentUser(req) {
   const header = req.headers['authorization'] || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   const payload = verifyToken(token);
   if (!payload) return null;
-  const user = db.get().users.find((u) => u.id === payload.sub);
+  const user = await users.find(payload.sub);
   return user || null;
 }
 
@@ -63,7 +63,7 @@ const server = http.createServer(async (req, res) => {
           ? await readBody(req)
           : {};
 
-      let user = currentUser(req);
+      let user = await currentUser(req);
       if (route.auth) {
         if (!user) throw new HttpError(401, 'Silakan login terlebih dahulu.');
         if (route.roles && !route.roles.includes(user.role)) {
@@ -83,9 +83,18 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-db.load();
 const localBase = 'http' + '://' + 'localhost:' + PORT;
-server.listen(PORT, () => {
-  console.log('\nSirkasir API berjalan di ' + localBase);
-  console.log('    Health check: ' + localBase + '/api/health\n');
-});
+
+pool
+  .query('SELECT 1')
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log('\nSirkasir API berjalan di ' + localBase);
+      console.log('    Health check: ' + localBase + '/api/health\n');
+    });
+  })
+  .catch((err) => {
+    console.error('Gagal terhubung ke PostgreSQL:', err.message);
+    console.error('Pastikan DATABASE_URL benar dan sudah menjalankan: npm run migrate && npm run seed');
+    process.exit(1);
+  });

@@ -1,4 +1,4 @@
-const db = require('../db');
+const { getSettings, updateSettings } = require('../repo');
 
 module.exports = [
   {
@@ -7,7 +7,7 @@ module.exports = [
     handler: async () => ({
       status: 'ok',
       service: 'sirkasir-api',
-      version: '0.7.0',
+      version: '0.8.0',
       time: new Date().toISOString(),
     }),
   },
@@ -15,18 +15,13 @@ module.exports = [
     method: 'GET',
     path: '/api/settings',
     auth: true,
-    handler: async () => db.get().settings,
+    handler: async () => getSettings(),
   },
   {
     method: 'PUT',
     path: '/api/settings',
     auth: true,
     roles: ['owner', 'manager'],
-    handler: async ({ body }) => {
-      const d = db.get();
-      d.settings = { ...d.settings, ...body };
-      db.save();
-      return d.settings;
-    },
+    handler: async ({ body }) => updateSettings(body || {}),
   },
 ];

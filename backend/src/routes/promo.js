@@ -1,5 +1,5 @@
 // CRUD promo + endpoint evaluasi untuk preview di kasir.
-const db = require('../db');
+const repo = require('../repo');
 const { HttpError, uid } = require('../utils');
 const promo = require('../promo');
 
@@ -56,7 +56,7 @@ module.exports = [
     path: '/api/promos',
     auth: true,
     handler: async () => {
-      const list = (db.get().promos || []).slice();
+      const list = await repo.promos.all();
       list.sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0));
       return list;
     },
@@ -67,14 +67,11 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ body }) => {
-      const d = db.get();
-      d.promos = d.promos || [];
       if (!body.name || !String(body.name).trim()) throw new HttpError(400, 'Nama promo wajib diisi.');
       const p = withDefaults(sanitize(body, {}));
       p.id = uid('promo');
       p.created_at = new Date().toISOString();
-      d.promos.push(p);
-      db.save();
+      await repo.promos.insert(p);
       return p;
     },
   },
@@ -84,11 +81,10 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ params, body }) => {
-      const d = db.get();
-      const p = (d.promos || []).find((x) => x.id === params.id);
+      const p = await repo.promos.find(params.id);
       if (!p) throw new HttpError(404, 'Promo tidak ditemukan.');
       Object.assign(p, sanitize(body, p));
-      db.save();
+      await repo.promos.update(p);
       return p;
     },
   },
@@ -98,11 +94,9 @@ module.exports = [
     auth: true,
     roles: ['owner', 'manager'],
     handler: async ({ params }) => {
-      const d = db.get();
-      const idx = (d.promos || []).findIndex((x) => x.id === params.id);
-      if (idx === -1) throw new HttpError(404, 'Promo tidak ditemukan.');
-      d.promos.splice(idx, 1);
-      db.save();
+      const p = await repo.promos.find(params.id);
+      if (!p) throw new HttpError(404, 'Promo tidak ditemukan.');
+      await repo.promos.remove(params.id);
       return { ok: true };
     },
   },
@@ -111,11 +105,11 @@ module.exports = [
     path: '/api/promos/evaluate',
     auth: true,
     handler: async ({ body }) => {
-      const d = db.get();
       const items = Array.isArray(body.items) ? body.items : [];
       const subtotal = Number(body.subtotal) || items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.qty) || 0), 0);
-      const customer = body.customer_id ? (d.customers || []).find((c) => c.id === body.customer_id) : null;
-      return promo.evaluate(d, { items, subtotal, customer, now: new Date(), code: body.code });
+      const customer = body.customer_id ? await repo.customers.find(body.customer_id) : null;
+      const promosList = await repo.promos.all();
+      return promo.evaluate(promosList, { items, subtotal, customer, now: new Date(), code: body.code });
     },
   },
 ];

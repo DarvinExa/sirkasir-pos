@@ -3,8 +3,8 @@
 const { uid } = require('./utils');
 
 // Ambil konfigurasi loyalty dari settings, dengan default aman.
-function config(d) {
-  const l = (d.settings && d.settings.loyalty) || {};
+function config(settings) {
+  const l = (settings && settings.loyalty) || {};
   return {
     enabled: l.enabled !== false, // default aktif
     earn_per: Number(l.earn_per) > 0 ? Number(l.earn_per) : 1000, // 1 poin per Rp1.000 belanja
@@ -13,8 +13,8 @@ function config(d) {
 }
 
 // Hitung berapa poin yang bisa ditukar & nilai rupiahnya (dipanggil sebelum total final).
-function redeemInfo(d, customer, redeemPoints) {
-  const cfg = config(d);
+function redeemInfo(settings, customer, redeemPoints) {
+  const cfg = config(settings);
   let pts = Math.max(0, parseInt(redeemPoints, 10) || 0);
   if (!customer || !cfg.enabled) pts = 0;
   pts = Math.min(pts, customer ? customer.points || 0 : 0);
@@ -23,8 +23,9 @@ function redeemInfo(d, customer, redeemPoints) {
 
 // Setelah total transaksi final diketahui: catat perolehan & pemakaian poin ke customer.
 // Mengembalikan ringkasan loyalty untuk disimpan di transaksi.
-function apply(d, customer, { total, redeemedPoints, redeemValue, tx }) {
-  const cfg = config(d);
+// Catatan: fungsi ini memutasi objek customer; pemanggil wajib menyimpannya ke DB.
+function apply(settings, customer, { total, redeemedPoints, redeemValue, tx }) {
+  const cfg = config(settings);
   const earned = cfg.enabled && customer ? Math.floor(Math.max(0, total) / cfg.earn_per) : 0;
   if (customer) {
     customer.points = Math.max(0, (customer.points || 0) - (redeemedPoints || 0) + earned);
