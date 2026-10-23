@@ -2,7 +2,7 @@
 
 Aplikasi Point of Sale (POS) untuk restoran dan warung makan. Mengelola pesanan dine-in per meja maupun takeaway, alur ke dapur (Kitchen Display), pembayaran (tunai/QRIS, split bill), stok bahan, laporan, program loyalti, promo, serta master data yang bisa dikustomisasi tiap restoran.
 
-Dibangun dengan Node.js (REST API tanpa framework berat) dengan penyimpanan **PostgreSQL** di sisi backend, dan React + Vite + Tailwind CSS di sisi frontend.
+Dibangun dengan Node.js (REST API tanpa framework berat) dengan penyimpanan **PostgreSQL** (driver `pg`, tanpa ORM/Prisma) di sisi backend, dan React + Vite + Tailwind CSS di sisi frontend.
 
 ## Fitur utama
 
@@ -33,7 +33,7 @@ createdb sirkasir
 cd backend
 npm install
 cp .env.example .env    # lalu WAJIB sesuaikan isinya (lihat di bawah)
-npm run setup
+npm run setup           # buat skema tabel (migrate) + isi data awal (seed)
 npm start               # API berjalan di http://localhost:4000
 ```
 
@@ -50,7 +50,6 @@ npm start               # API berjalan di http://localhost:4000
 > Untuk produksi, ganti juga `JWT_SECRET` dengan string acak yang panjang.
 
 Catatan:
-
 - `npm run migrate` hanya membuat/menyegarkan struktur tabel (aman diulang).
 - `npm run seed` mengisi **data demo** dan menimpa data lama.
 - `npm run setup` menjalankan migrate + seed demo sekaligus.
@@ -68,11 +67,12 @@ Catatan:
   Cocok kalau kamu mengunduh proyek ini untuk toko sendiri: tidak ada data contoh,
   tinggal isi menu, bahan, dan meja sesuai kebutuhanmu.
   - Akun admin default: `admin@sirkasir.test` / `admin123` (PIN `1111`). **Segera ganti** setelah login.
-  - Bisa dikustom lewat environment variable (.env) sebelum menjalankan, mis:
+  - Bisa dikustom lewat environment variable sebelum menjalankan, mis:
     ```bash
     ADMIN_EMAIL=aku@tokoku.com ADMIN_PASSWORD=rahasia123 STORE_NAME="Warung Makan Ku" npm run setup:blank
     ```
     Variabel yang didukung: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_PIN`, `ADMIN_NAME`, `STORE_NAME`.
+- Untuk DB cloud (Neon, Supabase, Railway) yang butuh SSL, set `PGSSL=true` di `.env`.
 - Buat database-nya dulu sebelum `npm run setup`, mis. `createdb -U postgres sirkasir`
   (atau lewat pgAdmin). Jalankan dari terminal mana saja — tidak perlu di folder tertentu.
 
@@ -88,8 +88,8 @@ npm run dev    # buka http://localhost:5173
 
 ### Akun demo
 
-| Peran | Email               | Password | PIN  |
-| ----- | ------------------- | -------- | ---- |
+| Peran | Email | Password | PIN |
+| ----- | ----- | -------- | --- |
 | Owner | owner@sirkasir.test | owner123 | 1111 |
 | Kasir | kasir@sirkasir.test | kasir123 | 2222 |
 
@@ -100,7 +100,7 @@ npm run dev    # buka http://localhost:5173
 ## Struktur proyek
 
 ```
-backend/    # REST API (Node.js), PostgreSQL, skema + seed
+backend/    # REST API (Node.js), PostgreSQL (driver pg), skema + seed
 frontend/   # Aplikasi React (Vite + Tailwind)
 ```
 
